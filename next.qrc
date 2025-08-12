@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="next_images">
+    <file>next.png</file>
+  </qresource>
+</RCC>
