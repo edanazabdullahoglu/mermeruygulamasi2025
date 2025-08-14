@@ -108,7 +108,20 @@ class MainLoadWindow(QMainWindow):
         isPlcBasicControlConnection = False
         global plcstarttime
         
+        # Kamera özellikleri (MV-CS050-10UC)
+        self.sensor_width_mm = 8.8  # 2/3" sensör genişliği (mm)
+        self.sensor_height_mm = 6.6  # 2/3" sensör yüksekliği (mm)
+        self.pixel_size_um = 3.45  # Pixel boyutu (mikrometre)
+        self.image_width_pixels = 2448  # Görüntü genişliği (pixel)
+        self.image_height_pixels = 2048  # Görüntü yüksekliği (pixel)
         
+        # Varsayılan çalışma mesafesi ve odak uzaklığı (mm)
+        # Bu değerleri kurulumunuza göre ayarlayın
+        self.working_distance_mm = 500  # Kameradan nesneye mesafe (mm) - değiştirilebilir
+        self.focal_length_mm = 25  # Lens odak uzaklığı (mm) - kullandığınız lense göre değiştirin
+        
+        # GSD hesapla
+        self.calculate_gsd()
 
         self.pen = QPen()
         self.pen.setColor(Qt.red)
@@ -120,6 +133,7 @@ class MainLoadWindow(QMainWindow):
         self.rect, self.line = None, None
         self.image_item = None
         self.all_rects = []  # Karelerin köşe konumlarını saklamak için liste
+        self.all_rects_cm = []  # Karelerin cm cinsinden değerlerini saklamak için
         self.drawing_enabled = False 
         self.rectengles_boder = []
         self.square_drawing = False 
@@ -152,6 +166,31 @@ class MainLoadWindow(QMainWindow):
             error_icon_st = QMessageBox.Icon.Warning
             self.error_message_box.show_error(error_message=error_message_st, title="Startup Error", error_icon=error_icon_st)
 
+    def calculate_gsd(self):
+        """GSD (Ground Sample Distance) hesapla - mm/pixel"""
+        # GSD = (pixel_size_um * working_distance_mm) / focal_length_mm
+        self.gsd_mm_per_pixel = (self.pixel_size_um / 1000) * self.working_distance_mm / self.focal_length_mm
+        self.gsd_cm_per_pixel = self.gsd_mm_per_pixel / 10
+        print(f"GSD: {self.gsd_mm_per_pixel:.4f} mm/pixel veya {self.gsd_cm_per_pixel:.4f} cm/pixel")
+    
+    def cm_to_pixel(self, cm_value):
+        """CM değerini pixel değerine çevir"""
+        return int(cm_value / self.gsd_cm_per_pixel)
+    
+    def pixel_to_cm(self, pixel_value):
+        """Pixel değerini CM değerine çevir"""
+        return pixel_value * self.gsd_cm_per_pixel
+    
+    def update_camera_parameters(self):
+        """Kamera parametrelerini güncelle (GUI'den alınabilir)"""
+        try:
+            # Eğer GUI'de input alanları varsa oradan alabilirsiniz
+            # self.working_distance_mm = float(self.ui.working_distance_input.text())
+            # self.focal_length_mm = float(self.ui.focal_length_input.text())
+            self.calculate_gsd()
+        except:
+            pass
+
     def Main_Load_Window(self):
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
@@ -164,13 +203,12 @@ class MainLoadWindow(QMainWindow):
         self.ui = loader.load("mermer_gui.ui", None)
         self.show()'''
         
-        # Sadece sayı alma işlevi ekledim
-        int_validator = QIntValidator()
-        float_validator = QDoubleValidator ()
-        self.ui.lineEdit.setValidator(QIntValidator())
-        self.ui.lineEdit_2.setValidator(int_validator)
-        # self.ui.lineEdit_3.setValidator(int_validator)
-        # self.ui.lineEdit_4.setValidator(int_validator)
+        # Sadece sayı alma işlevi ekledim - Float validator kullanıyoruz artık cm için
+        float_validator = QDoubleValidator()
+        self.ui.lineEdit.setValidator(float_validator)  # Genişlik (cm)
+        self.ui.lineEdit_2.setValidator(float_validator)  # Yükseklik (cm)
+        # self.ui.lineEdit_3.setValidator(float_validator)  # Testere boyu (cm) - eğer kullanılırsa
+        # self.ui.lineEdit_4.setValidator(float_validator)
         
         # Connect mouse press and move events to the graphicsView
         self.ui.graphicsView.mousePressEvent = self.mousePressEvent
@@ -209,6 +247,12 @@ class MainLoadWindow(QMainWindow):
         self.ui.pluspeedconveyor.clicked.connect(lambda:self.sendPlcSpeedPlus(12,1))
         self.ui.decreeasepedconveyor.clicked.connect(lambda:self.sendPlcSpeedeksi(12,1))
         self.ui.pushButton.clicked.connect(self.undo_last_square)
+        
+        # PLC'ye kare koordinatlarını CM olarak gönder butonu
+        self.ui.pushButton_5.clicked.connect(self.send_corners_to_plc_with_cm)
+        
+        # PLC bağlantısını başlat (Modbus TCP)
+        self.connect_plc("192.168.3.50", 502, True)
         ########################################################
 
     def update_time(self):
@@ -530,11 +574,17 @@ class MainLoadWindow(QMainWindow):
             # Kare boyutunu ve konumunu al
             self.kare = self.rect.rect()
 
-            # Kare genişliği ve yüksekliği
+            # Kare genişliği ve yüksekliği (pixel)
             self.mermer_alani_width = self.kare.width()
             self.mermer_alani_height = self.kare.height()
             self.mermer_alani = self.kare.size()
-            print (self.mermer_alani_height)
+            
+            # CM cinsinden değerleri hesapla
+            self.mermer_alani_width_cm = self.pixel_to_cm(self.mermer_alani_width)
+            self.mermer_alani_height_cm = self.pixel_to_cm(self.mermer_alani_height)
+            
+            print(f"Mermer Alanı - Pixel: {self.mermer_alani_height}px x {self.mermer_alani_width}px")
+            print(f"Mermer Alanı - CM: {self.mermer_alani_height_cm:.2f}cm x {self.mermer_alani_width_cm:.2f}cm")
             
             # Kareyi tanımlayan dört köşe noktasını hesapla
             self.x1 = self.kare.left()
@@ -549,102 +599,46 @@ class MainLoadWindow(QMainWindow):
             self.last_x = self.x1
             self.last_y = self.y1
             
-            
-            print(self.mermer_alani_height,self.mermer_alani_width)
-            
-
-            # Köşe noktalarını ana listeye ekle
-            corners = [{'sol_üst':(self.x1, self.y1), 'Sağ_üst':(self.x2, self.y2), 'Sağ_Alt':(self.x3, self.y3), 'Sol_alt':(self.x4, self.y4)}]
+            # Köşe noktalarını ana listeye ekle (hem pixel hem cm olarak)
+            corners = [{'sol_üst':(self.x1, self.y1), 'Sağ_üst':(self.x2, self.y2), 
+                       'Sağ_Alt':(self.x3, self.y3), 'Sol_alt':(self.x4, self.y4),
+                       'Alan_CM': f"{self.mermer_alani_width_cm:.2f} x {self.mermer_alani_height_cm:.2f}"}]
             self.rectengles_boder.append(corners)
 
             # Ana liste öğelerini gösteren bir liste widget'ına ekle
             for item in self.rectengles_boder:
                 self.ui.image_list_widget.addItem(str(item))
-                    
-    '''def draw_rectengles(self):
-        height_text = self.ui.lineEdit.text()
-        width_text= self.ui.lineEdit_2.text()
-        angle_text = self.ui.lineEdit_3.text()
-        margin_text = self.ui.lineEdit_4.text()
-
-        # Boş değer kontrolü
-        if not width_text or not height_text or not angle_text:
-            QMessageBox.warning(self, "Warning", "Please input Height or Width or Angle.", QMessageBox.Ok)
-            return
-        
-        width = int(width_text)
-        height = int(height_text)
-        angle = int(angle_text)
-        margin = int(margin_text)
-        image_widht_check = self.ui.graphicsView.sceneRect().width()
-        image_height_check = self.ui.graphicsView.sceneRect().height()
-        print(image_height_check,image_widht_check)
-
-        # 0 değer kontrolü
-        if width <= 0 or height <= 0:
-            QMessageBox.warning(self, "Warning", "Height or Width is not valid.", QMessageBox.Ok)
-            return
-
-        # Check if width and height are greater than image dimensions
-        if width > image_widht_check or height > image_height_check:
-            QMessageBox.warning(self, "Warning", "Input Values exceed image size.", QMessageBox.Ok)
-            return
-        
-        center_x = image_widht_check / 2
-        center_y = image_height_check / 2
-
-        # Kareyi oluşturun
-        square_item = QGraphicsRectItem(-width / 2, -height / 2, width, height)
-        square_item.setPos(center_x, center_y)
-        square_item.setRotation(angle)
-        color_random = QColor(randrange(40), randrange(40), randrange(40))
-        square_item.setBrush(QBrush(color_random))  # Kareye renk ekleyin
-
-        # Kareyi sahneye ekleyin
-        self.ui.graphicsView.scene().addItem(square_item)
-
-        # Kareyi gelecekte referans için kare öğesine ekleyin
-        self.square_item = square_item'''
-
-    def is_float(str):
-        try:
-            float(str)
-            return True
-        except ValueError:
-            return False
     
-    def closeEvent(self, event):
-        reply = QMessageBox.question(self,"Onay", "Çıkmak istediğinizden emin misiniz?",QMessageBox.Yes | QMessageBox.No,QMessageBox.No)
-        if reply == QMessageBox.Yes:
-            event.accept()
-            #用过sys.exit(0)和sys.exit(app.exec_())，但没起效果
-            self.close_device()
-            os._exit(0)
-        else:
-            event.ignore()
-
     def drawing_square_text(self):
         if self.square_drawing == True:                   
-            # Girilen genişlik ve yükseklik değerlerini al
+            # Girilen genişlik ve yükseklik değerlerini al (CM cinsinden)
             self.square_width_text = self.ui.lineEdit.text()
             self.square_height_text = self.ui.lineEdit_2.text()
-            # self.square_aci_text = self.ui.lineEdit_3.text()
-            # self.square_testere_text = self.ui.lineEdit_4.text()
+            # self.square_testere_text = self.ui.lineEdit_3.text()  # Testere boyu CM cinsinden
 
             if not self.square_width_text or not  self.square_height_text:
                 QMessageBox.warning(self,"Uyarı", "Lütfen Boş Değer Girmeyiniz!")
                 return 
 
-            self.square_widht = int(self.square_width_text)
-            self.square_height = int(self.square_height_text)
+            # CM cinsinden değerleri al
+            self.square_width_cm = float(self.square_width_text)
+            self.square_height_cm = float(self.square_height_text)
             self.square_aci = 0
-            self.square_testere = 15
+            self.square_testere_cm = 1.5  # Testere boyu 1.5 cm (varsayılan)
+            
+            # CM'den pixel'e çevir
+            self.square_widht = self.cm_to_pixel(self.square_width_cm)
+            self.square_height = self.cm_to_pixel(self.square_height_cm)
+            self.square_testere = self.cm_to_pixel(self.square_testere_cm)
+            
+            print(f"Kare Boyutları - CM: {self.square_width_cm}cm x {self.square_height_cm}cm")
+            print(f"Kare Boyutları - Pixel: {self.square_widht}px x {self.square_height}px")
             
             if self.square_widht > self.mermer_alani_width or self.square_height > self.mermer_alani_height:
                 QMessageBox.warning(self,"Uyarı","Mermer Alanının Genişlik ve Yükseklik Değerinden Küçük Değer Giriniz")
                 return 
             
-            if self.square_widht <= 0 or self.square_height <= 0:
+            if self.square_width_cm <= 0 or self.square_height_cm <= 0:
                 QMessageBox.warning(self, "Uyarı", "Lütfen 0 dan Büyük Değerler Giriniz", QMessageBox.Ok)
                 return
             
@@ -667,17 +661,35 @@ class MainLoadWindow(QMainWindow):
                 square.setPen(QPen(Qt.green))
                 self.ui.graphicsView.scene().addItem(square)
                 
-
+                # Pixel koordinatları
                 self.corners = [
                     {'x1': self.last_x, 'y1': self.last_y},
                     {'x2': self.last_x + self.square_widht, 'y2': self.last_y},
                     {'x3': self.last_x + self.square_widht, 'y3': self.last_y + self.square_height},
                     {'x4': self.last_x, 'y4': self.last_y + self.square_height}
                 ]
-                self.all_rects.append(
-                    {"corners":self.corners,
-                     "rect_item":square
-                     })  # Kare köşe noktalarını ana listeye ekleme 
+                
+                # CM cinsinden koordinatları
+                self.corners_cm = [
+                    {'x1_cm': self.pixel_to_cm(self.last_x), 'y1_cm': self.pixel_to_cm(self.last_y)},
+                    {'x2_cm': self.pixel_to_cm(self.last_x + self.square_widht), 'y2_cm': self.pixel_to_cm(self.last_y)},
+                    {'x3_cm': self.pixel_to_cm(self.last_x + self.square_widht), 'y3_cm': self.pixel_to_cm(self.last_y + self.square_height)},
+                    {'x4_cm': self.pixel_to_cm(self.last_x), 'y4_cm': self.pixel_to_cm(self.last_y + self.square_height)}
+                ]
+                
+                self.all_rects.append({
+                    "corners": self.corners,
+                    "rect_item": square,
+                    "width_cm": self.square_width_cm,
+                    "height_cm": self.square_height_cm
+                })
+                
+                self.all_rects_cm.append({
+                    "corners_cm": self.corners_cm,
+                    "width_cm": self.square_width_cm,
+                    "height_cm": self.square_height_cm
+                })
+                
                 self.last_x += self.square_widht + self.square_testere
                 self.update_list_widget()
                 
@@ -688,26 +700,81 @@ class MainLoadWindow(QMainWindow):
         # QListWidget içeriğini güncelleme
         self.ui.listWidget_2.clear()  # Önceki öğeleri temizleme
         for i, data in enumerate(self.all_rects, start=1):
-            corners=data["corners"]
-            item = QListWidgetItem(f"Kare {i}: {corners}")
+            width_cm = data["width_cm"]
+            height_cm = data["height_cm"]
+            corners = data["corners"]
+            item = QListWidgetItem(f"Kare {i}: {width_cm:.2f}cm x {height_cm:.2f}cm - Pixel Köşeler: {corners}")
             self.ui.listWidget_2.addItem(item)    
     
     def undo_last_square(self):
-        lastSquare=self.all_rects.pop()
-        newSquarestartx1=lastSquare["corners"][0]['x1']
-        newSquarestarty1=lastSquare["corners"][0]['y1']
-        self.last_x=newSquarestartx1
-        self.last_y=newSquarestarty1
-        self.update_list_widget()
+        if self.all_rects:
+            lastSquare = self.all_rects.pop()
+            if self.all_rects_cm:
+                self.all_rects_cm.pop()
+            newSquarestartx1 = lastSquare["corners"][0]['x1']
+            newSquarestarty1 = lastSquare["corners"][0]['y1']
+            self.last_x = newSquarestartx1
+            self.last_y = newSquarestarty1
+            self.update_list_widget()
+            
+            rect_item = lastSquare["rect_item"]
+            self.ui.graphicsView.scene().removeItem(rect_item)
     
-        # for item in self.ui.graphicsView.scene().items():
-        #     if isinstance(item,QGraphicsRectItem):
-        #         if item.rect().x()==newSquarestartx1 and item.rect().y()== newSquarestarty1:
-        #             self.ui.graphicsView.scene().removeItem(item)
-        rect_item=lastSquare["rect_item"]
-        self.ui.graphicsView.scene().removeItem(rect_item)
+    def send_corners_to_plc_with_cm(self):
+        """PLC'ye CM cinsinden değerleri gönder"""
+        try:
+            # PLC'nin Modbus sunucu adresi ve portunu ayarlayın
+            host = "192.168.3.50"
+            port = 502
+            plc = ModbusClient()
+
+            plc.host(host)
+            plc.port(port)
+            plc.open()
+
+            if plc.is_open():
+                address = 0
+                for rect_data in self.all_rects_cm:
+                    corners_cm = rect_data["corners_cm"]
+                    width_cm = rect_data["width_cm"]
+                    height_cm = rect_data["height_cm"]
+                    
+                    # CM değerlerini integer'a çevir (100 ile çarparak 2 ondalık basamak hassasiyeti koruyabilirsiniz)
+                    for corner in corners_cm:
+                        for key, value in corner.items():
+                            # CM değerini 100 ile çarpıp integer'a çevir (örn: 12.34 cm -> 1234)
+                            int_value = int(value * 100)
+                            plc.write_single_register(address, int_value)
+                            address += 1
+                    
+                    # Genişlik ve yükseklik değerlerini de gönder
+                    plc.write_single_register(address, int(width_cm * 100))
+                    address += 1
+                    plc.write_single_register(address, int(height_cm * 100))
+                    address += 1
+                    
+                print(f"PLC'ye {len(self.all_rects_cm)} kare başarıyla gönderildi (CM cinsinden)")
+                
+                # Başarılı mesajı göster
+                error_message_st = f"PLC'ye {len(self.all_rects_cm)} kare başarıyla gönderildi (CM cinsinden)"
+                error_message_title = "BAŞARILI"
+                error_icon_st = QMessageBox.Icon.Information
+                self.information_messag_box.show_information(error_message_st, error_icon_st, error_message_title)
+
+        except Exception as e:
+            print(f"Error: {e}")
+            error_message_st = f"PLC'ye veri gönderme hatası: {str(e)}"
+            error_message_title = "HATA"
+            error_icon_st = QMessageBox.Icon.Critical
+            self.error_message_box.show_error(error_message=error_message_st, title=error_message_title, error_icon=error_icon_st)
+        
+        finally:
+            # Bağlantıyı kapat
+            plc.close()
+            print("Connection closed")
         
     def send_corners_plc(self):
+        """Orijinal pixel değerlerini gönderen fonksiyon (geriye uyumluluk için)"""
         try:
             # PLC'nin Modbus sunucu adresi ve portunu ayarlayın
             host = "192.168.3.50"
@@ -734,21 +801,6 @@ class MainLoadWindow(QMainWindow):
             # Bağlantıyı kapat
             plc.close()
             print("Connection closed")
-
-            '''# İkinci kareyi çiz
-            square_item = QGraphicsRectItem(self.solust , self.y1 , self.square_widht, self.square_height)
-            
-            # Kareyi döndür
-            self.rotate_square(square_item, self.square_aci)
-            
-            color_random = QColor(randrange(40), randrange(40), randrange(40))
-            square_item.setPen(QPen(Qt.green,2))  # Kareye rastgele renk ekle
-
-            # Kareyi sahneye ekle
-            self.ui.graphicsView.scene().addItem(square_item)
-
-            # Kareyi gelecekte referans için kare öğesine ekleyin
-            self.all_rects.append(square_item)'''
 
     def rotate_square(self, square, angle):
         # Açı değerini al
@@ -915,5 +967,3 @@ if __name__ == "__main__":
     app = QApplication([])
     window = MainLoadWindow()
     sys.exit(app.exec_())
-    
- 
